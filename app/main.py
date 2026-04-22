@@ -1,20 +1,24 @@
+import json
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, select
 
-from app.models import User, UserRole, create_db_and_tables, get_session
 from app.auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     Token,
     authenticate_user,
     create_access_token,
     get_password_hash,
+    get_user_from_token,
 )
 from app.dependencies import get_current_user, require_admin
+from app.models import Message, User, UserRole, create_db_and_tables, engine, get_session
 
 
 @asynccontextmanager
@@ -25,11 +29,43 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Chat Application API", version="1.0.0", lifespan=lifespan)
 
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, list[WebSocket]] = {}
+
+    async def connect(self, room_id: str, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.setdefault(room_id, []).append(websocket)
+
+    def disconnect(self, room_id: str, websocket: WebSocket):
+        room_connections = self.active_connections.get(room_id, [])
+        if websocket in room_connections:
+            room_connections.remove(websocket)
+        if not room_connections and room_id in self.active_connections:
+            del self.active_connections[room_id]
+
+    async def broadcast(self, room_id: str, payload: dict):
+        stale_connections: list[WebSocket] = []
+        for connection in list(self.active_connections.get(room_id, [])):
+            try:
+                await connection.send_json(payload)
+            except Exception:
+                stale_connections.append(connection)
+
+        for connection in stale_connections:
+            self.disconnect(room_id, connection)
+
+
+manager = ConnectionManager()
+
+
 class UserCreate(BaseModel):
     username: str
     email: str
     password: str
     role: UserRole = UserRole.USER
+
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -39,19 +75,66 @@ class UserResponse(BaseModel):
     email: str
     role: UserRole
 
+
+def serialize_message(message: Message) -> dict:
+    return {
+        "id": message.id,
+        "room_id": message.room_id,
+        "user_id": message.user_id,
+        "username": message.username,
+        "content": message.content,
+        "created_at": message.created_at.isoformat(),
+    }
+
+
+def load_room_history(
+    session: Session, room_id: str, cursor: Optional[int] = None, limit: int = 20
+) -> tuple[list[dict], Optional[int]]:
+    safe_limit = max(1, min(limit, 50))
+    statement = select(Message).where(Message.room_id == room_id)
+
+    if cursor is not None:
+        statement = statement.where(Message.id < cursor)
+
+    statement = statement.order_by(Message.id.desc()).limit(safe_limit + 1)
+    results = list(session.exec(statement).all())
+
+    has_more = len(results) > safe_limit
+    if has_more:
+        results = results[:safe_limit]
+
+    results.reverse()
+    next_cursor = results[0].id if has_more and results else None
+    return [serialize_message(message) for message in results], next_cursor
+
+
+def extract_message_content(raw_text: str) -> str:
+    content = raw_text
+
+    try:
+        parsed = json.loads(raw_text)
+        if isinstance(parsed, dict):
+            content = str(parsed.get("content", ""))
+    except json.JSONDecodeError:
+        content = raw_text
+
+    return content.strip()
+
+
 @app.get("/")
 async def root():
     """Root endpoint for the chat application."""
     return {"message": "Welcome to Chat Application API"}
+
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy"}
 
+
 @app.post("/auth/signup", response_model=UserResponse)
 async def signup(user: UserCreate, session: Session = Depends(get_session)):
-    # Check if user already exists
     db_user = session.exec(
         select(User).where(
             (User.username == user.username) | (User.email == user.email)
@@ -60,21 +143,24 @@ async def signup(user: UserCreate, session: Session = Depends(get_session)):
     if db_user:
         raise HTTPException(status_code=400, detail="Username or email already registered")
 
-    # Hash password and create user
     hashed_password = get_password_hash(user.password)
     db_user = User(
         username=user.username,
         email=user.email,
         hashed_password=hashed_password,
-        role=user.role
+        role=user.role,
     )
     session.add(db_user)
     session.commit()
     session.refresh(db_user)
     return db_user
 
+
 @app.post("/auth/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    session: Session = Depends(get_session),
+):
     user = authenticate_user(form_data.username, form_data.password, session)
     if not user:
         raise HTTPException(
@@ -84,16 +170,86 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), session: Sessi
         )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username, "role": user.role.value}, expires_delta=access_token_expires
+        data={"sub": user.username, "role": user.role.value},
+        expires_delta=access_token_expires,
     )
     return {"access_token": access_token, "token_type": "bearer"}
+
 
 @app.get("/protected/admin")
 async def admin_only(current_user: User = Depends(require_admin)):
     """Protected route that requires admin role."""
     return {"message": f"Hello {current_user.username}, you are an admin!"}
 
+
 @app.get("/protected/user")
 async def user_or_admin(current_user: User = Depends(get_current_user)):
     """Protected route accessible to any authenticated user."""
     return {"message": f"Hello {current_user.username}, you are authenticated!"}
+
+
+@app.websocket("/ws/{room_id}")
+async def websocket_chat(
+    websocket: WebSocket,
+    room_id: str,
+    token: Optional[str] = None,
+    cursor: Optional[int] = None,
+    limit: int = 20,
+):
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    with Session(engine) as session:
+        try:
+            user = get_user_from_token(token, session)
+        except (JWTError, ValueError):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        if user is None:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        history, next_cursor = load_room_history(session, room_id, cursor, limit)
+
+        await manager.connect(room_id, websocket)
+        await websocket.send_json(
+            {
+                "type": "history",
+                "room_id": room_id,
+                "messages": history,
+                "next_cursor": next_cursor,
+            }
+        )
+
+        try:
+            while True:
+                raw_text = await websocket.receive_text()
+                content = extract_message_content(raw_text)
+
+                if not content:
+                    await websocket.send_json(
+                        {"type": "error", "detail": "Message content cannot be empty"}
+                    )
+                    continue
+
+                db_message = Message(
+                    room_id=room_id,
+                    user_id=user.id,
+                    username=user.username,
+                    content=content,
+                )
+                session.add(db_message)
+                session.commit()
+                session.refresh(db_message)
+
+                await manager.broadcast(
+                    room_id,
+                    {"type": "message", "room_id": room_id, "message": serialize_message(db_message)},
+                )
+        except WebSocketDisconnect:
+            manager.disconnect(room_id, websocket)
+        except Exception:
+            manager.disconnect(room_id, websocket)
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
