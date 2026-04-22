@@ -1,18 +1,29 @@
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from app.models import User, UserRole, create_db_and_tables, get_session
-from app.auth import authenticate_user, create_access_token, get_password_hash, Token
-from app.dependencies import get_current_user, require_admin
+from contextlib import asynccontextmanager
 from datetime import timedelta
 
-app = FastAPI(title="Chat Application API", version="1.0.0")
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel, ConfigDict
+from sqlmodel import Session, select
 
-# Create database tables on startup
-@app.on_event("startup")
-def on_startup():
+from app.models import User, UserRole, create_db_and_tables, get_session
+from app.auth import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    Token,
+    authenticate_user,
+    create_access_token,
+    get_password_hash,
+)
+from app.dependencies import get_current_user, require_admin
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     create_db_and_tables()
+    yield
+
+
+app = FastAPI(title="Chat Application API", version="1.0.0", lifespan=lifespan)
 
 class UserCreate(BaseModel):
     username: str
@@ -21,6 +32,8 @@ class UserCreate(BaseModel):
     role: UserRole = UserRole.USER
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     username: str
     email: str
@@ -39,8 +52,10 @@ async def health_check():
 @app.post("/auth/signup", response_model=UserResponse)
 async def signup(user: UserCreate, session: Session = Depends(get_session)):
     # Check if user already exists
-    db_user = session.query(User).filter(
-        (User.username == user.username) | (User.email == user.email)
+    db_user = session.exec(
+        select(User).where(
+            (User.username == user.username) | (User.email == user.email)
+        )
     ).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username or email already registered")
@@ -67,7 +82,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), session: Sessi
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token_expires = timedelta(minutes=30)
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username, "role": user.role.value}, expires_delta=access_token_expires
     )
