@@ -8,6 +8,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from jose import JWTError
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, select
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Chat Application API", version="1.0.0", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 TASK3_DEMO_PATH = Path("app/static/task3.html")
 MESSAGE_RATE_LIMIT_COUNT = 5
 MESSAGE_RATE_LIMIT_WINDOW_SECONDS = 10
@@ -267,6 +269,7 @@ async def websocket_chat(
     cursor: Optional[int] = None,
     limit: int = 20,
 ):
+    print(f"DEBUG WS connect attempt: room_id='{room_id}', token_present={token is not None}")
     if not token:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
