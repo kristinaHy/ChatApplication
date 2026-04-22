@@ -116,6 +116,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
+def require_non_empty(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{field_name} is required",
+        )
+    return normalized
+
+
 def serialize_message(message: Message) -> dict:
     return {
         "id": message.id,
@@ -181,18 +191,20 @@ async def task3_demo():
 
 @app.post("/auth/signup", response_model=UserResponse)
 async def signup(user: UserCreate, session: Session = Depends(get_session)):
+    username = require_non_empty(user.username, "username")
+    email = require_non_empty(user.email, "email")
+    password = require_non_empty(user.password, "password")
+
     db_user = session.exec(
-        select(User).where(
-            (User.username == user.username) | (User.email == user.email)
-        )
+        select(User).where((User.username == username) | (User.email == email))
     ).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username or email already registered")
 
-    hashed_password = get_password_hash(user.password)
+    hashed_password = get_password_hash(password)
     db_user = User(
-        username=user.username,
-        email=user.email,
+        username=username,
+        email=email,
         hashed_password=hashed_password,
         role=user.role,
     )
@@ -217,13 +229,10 @@ async def login(request: Request, session: Session = Depends(get_session)):
         username = form_data.get("username")
         password = form_data.get("password")
 
-    if not username or not password:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="username and password are required",
-        )
+    username = require_non_empty(str(username or ""), "username")
+    password = require_non_empty(str(password or ""), "password")
 
-    user = authenticate_user(str(username), str(password), session)
+    user = authenticate_user(username, password, session)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
