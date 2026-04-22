@@ -261,16 +261,38 @@ async def user_or_admin(current_user: User = Depends(get_current_user)):
     return {"message": f"Hello {current_user.username}, you are authenticated!"}
 
 
+@app.get("/debug/routes")
+def list_routes():
+    return [{"path": r.path, "name": getattr(r, 'name', 'N/A'), "methods": getattr(r, 'methods', 'N/A')} for r in app.routes]
+
+
 @app.websocket("/ws/{room_id}")
 async def websocket_chat(
     websocket: WebSocket,
     room_id: str,
-    token: Optional[str] = None,
     cursor: Optional[int] = None,
     limit: int = 20,
 ):
-    print(f"DEBUG WS connect attempt: room_id='{room_id}', token_present={token is not None}")
+    token = websocket.query_params.get("token")
+    raw_cursor = websocket.query_params.get("cursor")
+    raw_limit = websocket.query_params.get("limit")
+
+    if raw_cursor is not None:
+        try:
+            cursor = int(raw_cursor)
+        except ValueError:
+            cursor = None
+
+    if raw_limit is not None:
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            limit = 20
+
+    await websocket.accept()
+
     if not token:
+        await websocket.send_json({"type": "error", "detail": "Missing token"})
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -278,16 +300,18 @@ async def websocket_chat(
         try:
             user = get_user_from_token(token, session)
         except (JWTError, ValueError):
+            await websocket.send_json({"type": "error", "detail": "Invalid or expired token"})
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
         if user is None:
+            await websocket.send_json({"type": "error", "detail": "User not found for token"})
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
         history, next_cursor = load_room_history(session, room_id, cursor, limit)
 
-        await manager.connect(room_id, websocket)
+        manager.active_connections.setdefault(room_id, []).append(websocket)
         await websocket.send_json(
             {
                 "type": "history",

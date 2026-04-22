@@ -241,6 +241,52 @@
       element.style.background = isError ? "#450a0a" : "#1e293b";
     }
 
+    function saveAuth(token, username) {
+      accessToken = token;
+      currentUsername = username;
+      localStorage.setItem("chatDemoToken", token);
+      localStorage.setItem("chatDemoUsername", username);
+    }
+
+    function clearStoredAuth() {
+      accessToken = "";
+      currentUsername = "";
+      localStorage.removeItem("chatDemoToken");
+      localStorage.removeItem("chatDemoUsername");
+    }
+
+    function parseJwtPayload(token) {
+      try {
+        const parts = token.split(".");
+        if (parts.length !== 3) {
+          return null;
+        }
+
+        const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+        return JSON.parse(atob(padded));
+      } catch {
+        return null;
+      }
+    }
+
+    function getTokenStatus() {
+      if (!accessToken) {
+        return { valid: false, reason: "missing" };
+      }
+
+      const payload = parseJwtPayload(accessToken);
+      if (!payload || !payload.sub || !payload.exp) {
+        return { valid: false, reason: "invalid" };
+      }
+
+      if (Date.now() >= payload.exp * 1000) {
+        return { valid: false, reason: "expired" };
+      }
+
+      return { valid: true, username: payload.sub };
+    }
+
     function appendMessage(meta, content) {
       const wrapper = document.createElement("div");
       wrapper.className = "message";
@@ -315,22 +361,31 @@
           throw new Error(JSON.stringify(data));
         }
 
-        accessToken = data.access_token;
-        currentUsername = loginUsername.value.trim();
-        localStorage.setItem("chatDemoToken", accessToken);
-        localStorage.setItem("chatDemoUsername", currentUsername);
+        saveAuth(data.access_token, loginUsername.value.trim());
 
         setStatus(loginStatus, "Login successful. JWT saved for WebSocket use.\n" + JSON.stringify(data, null, 2));
       } catch (error) {
-        setStatus(loginStatus, "Login failed:\n" + error.message, true);
+        clearStoredAuth();
+        setStatus(loginStatus, "Login failed. Stored JWT was cleared, so WebSocket connect is blocked until a successful login.\n" + error.message, true);
       }
     }
 
     function connectWebSocket() {
-      if (!accessToken) {
-        setStatus(wsStatus, "Connect failed: login first to obtain a JWT token.", true);
+      const tokenStatus = getTokenStatus();
+      if (!tokenStatus.valid) {
+        clearStoredAuth();
+        const reason =
+          tokenStatus.reason === "expired"
+            ? "the saved JWT has expired"
+            : tokenStatus.reason === "invalid"
+              ? "the saved JWT is invalid"
+              : "login is required";
+        setStatus(wsStatus, `Connect failed: ${reason}. Please log in again.`, true);
+        setStatus(loginStatus, "A valid JWT is required before opening the WebSocket connection.", true);
         return;
       }
+
+      currentUsername = tokenStatus.username || currentUsername;
 
       if (socket && socket.readyState === WebSocket.OPEN) {
         setStatus(wsStatus, "Already connected.");
@@ -390,7 +445,13 @@
       };
 
       socket.onclose = (event) => {
-        setStatus(wsStatus, `Disconnected. Close code: ${event.code}`);
+        if (event.code === 1008) {
+          clearStoredAuth();
+          setStatus(wsStatus, "Disconnected. Authentication failed or token expired. Please log in again.", true);
+          setStatus(loginStatus, "JWT was rejected by the server and has been cleared from storage.", true);
+        } else {
+          setStatus(wsStatus, `Disconnected. Close code: ${event.code}`);
+        }
         socket = null;
       };
 
@@ -430,11 +491,23 @@
     document.getElementById("sendBtn").addEventListener("click", sendMessage);
     document.getElementById("clearBtn").addEventListener("click", clearMessages);
 
-    if (accessToken) {
-      setStatus(loginStatus, "Stored JWT token found in localStorage and ready to use for WebSocket connection.");
-    }
     if (currentUsername) {
       loginUsername.value = currentUsername;
+    }
+
+    if (accessToken) {
+      const tokenStatus = getTokenStatus();
+      if (tokenStatus.valid) {
+        currentUsername = tokenStatus.username || currentUsername;
+        setStatus(loginStatus, `Stored JWT token found for ${currentUsername || "the current user"} and ready to use for WebSocket connection.`);
+      } else {
+        clearStoredAuth();
+        const reason =
+          tokenStatus.reason === "expired"
+            ? "Stored JWT token expired and was cleared."
+            : "Stored JWT token was invalid and was cleared.";
+        setStatus(loginStatus, reason, true);
+      }
     }
   </script>
 </body>
