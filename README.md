@@ -416,3 +416,50 @@ This demonstrates:
 
 ### Deliverable
 **A working WebSocket endpoint that supports multi-client, multi-room real-time messaging, JWT-protected access, and persisted message history.**
+
+### Task 3 Screenshots
+![Task 3 Screenshot 1](images/task3.png)
+
+![Task 3 Screenshot 2](images/task3.1.png)
+
+![Task 3 Screenshot 3](images/task3.3.png)
+
+![Task 3 Screenshot 4](images/task3.4.png)
+
+## Group B Task: Rate Limiting
+
+### Chosen Feature
+Implemented **per-user message rate limiting** on the protected WebSocket chat endpoint.
+
+### What Was Built
+A `MessageRateLimiter` was added in `app/main.py` to control how frequently an authenticated user can send chat messages over the WebSocket connection.
+
+Current limits:
+- maximum **5 messages**
+- within **10 seconds**
+- enforced **per authenticated user**
+
+If a user exceeds the limit, the server does not save or broadcast the message. Instead, it sends a structured response like:
+
+```json
+{
+  "type": "rate_limit",
+  "detail": "Rate limit exceeded. Max 5 messages per 10 seconds.",
+  "retry_after_seconds": 4
+}
+```
+
+### Why This Design Was Chosen
+This design was chosen because:
+- it is simple and predictable for demonstration purposes
+- it prevents obvious message spam without blocking normal chat usage
+- it works per user rather than globally, so one noisy client does not throttle everyone else
+- it gives the client a `retry_after_seconds` value, which makes the limit easier to handle in the UI
+
+The implementation uses an in-memory `deque` of recent send timestamps per user. Old timestamps outside the 10-second window are removed before each new message is evaluated.
+
+### Where It Is Enforced
+Rate limiting is enforced inside the WebSocket message loop in `app/main.py`, after the user is authenticated and before a message is written to the database or broadcast to the room.
+
+### Deliverable
+**Working rate limiting on the WebSocket endpoint, with a brief explanation of what was built and why those design choices were made.**
