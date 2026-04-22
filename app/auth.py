@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 
-from jose import jwt
+from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -43,6 +43,21 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+
+def verify_token(token: str) -> TokenData:
+    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    username = payload.get("sub")
+    role = payload.get("role")
+    if username is None or role is None:
+        raise JWTError("Missing token fields")
+    return TokenData(username=username, role=UserRole(role))
+
+
+def get_user_from_token(token: str, session: Session) -> Optional[User]:
+    token_data = verify_token(token)
+    statement = select(User).where(User.username == token_data.username)
+    return session.exec(statement).first()
 
 
 def authenticate_user(username: str, password: str, session: Session):
