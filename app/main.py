@@ -1,10 +1,13 @@
 import json
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from pathlib import Path
+from time import monotonic
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import FileResponse
 from jose import JWTError
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, select
@@ -28,6 +31,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Chat Application API", version="1.0.0", lifespan=lifespan)
+TASK3_DEMO_PATH = Path("app/static/task3.html")
+MESSAGE_RATE_LIMIT_COUNT = 5
+MESSAGE_RATE_LIMIT_WINDOW_SECONDS = 10
 
 
 class ConnectionManager:
@@ -60,6 +66,35 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+class MessageRateLimiter:
+    def __init__(self, max_messages: int, window_seconds: int):
+        self.max_messages = max_messages
+        self.window_seconds = window_seconds
+        self.user_message_times: dict[int, deque[float]] = {}
+
+    def allow(self, user_id: int) -> tuple[bool, int]:
+        now = monotonic()
+        message_times = self.user_message_times.setdefault(user_id, deque())
+
+        while message_times and now - message_times[0] >= self.window_seconds:
+            message_times.popleft()
+
+        if len(message_times) >= self.max_messages:
+            retry_after = max(
+                1, int(self.window_seconds - (now - message_times[0])) + 1
+            )
+            return False, retry_after
+
+        message_times.append(now)
+        return True, 0
+
+
+rate_limiter = MessageRateLimiter(
+    max_messages=MESSAGE_RATE_LIMIT_COUNT,
+    window_seconds=MESSAGE_RATE_LIMIT_WINDOW_SECONDS,
+)
+
+
 class UserCreate(BaseModel):
     username: str
     email: str
@@ -74,6 +109,11 @@ class UserResponse(BaseModel):
     username: str
     email: str
     role: UserRole
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 
 def serialize_message(message: Message) -> dict:
@@ -133,6 +173,12 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/task3", response_class=FileResponse)
+async def task3_demo():
+    """Browser demo page for Task 3 WebSocket chat testing."""
+    return FileResponse(TASK3_DEMO_PATH)
+
+
 @app.post("/auth/signup", response_model=UserResponse)
 async def signup(user: UserCreate, session: Session = Depends(get_session)):
     db_user = session.exec(
@@ -157,11 +203,27 @@ async def signup(user: UserCreate, session: Session = Depends(get_session)):
 
 
 @app.post("/auth/login", response_model=Token)
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    session: Session = Depends(get_session),
-):
-    user = authenticate_user(form_data.username, form_data.password, session)
+async def login(request: Request, session: Session = Depends(get_session)):
+    username: Optional[str] = None
+    password: Optional[str] = None
+    content_type = request.headers.get("content-type", "").lower()
+
+    if "application/json" in content_type:
+        payload = LoginRequest.model_validate(await request.json())
+        username = payload.username
+        password = payload.password
+    else:
+        form_data = await request.form()
+        username = form_data.get("username")
+        password = form_data.get("password")
+
+    if not username or not password:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="username and password are required",
+        )
+
+    user = authenticate_user(str(username), str(password), session)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -231,6 +293,21 @@ async def websocket_chat(
                 if not content:
                     await websocket.send_json(
                         {"type": "error", "detail": "Message content cannot be empty"}
+                    )
+                    continue
+
+                allowed, retry_after = rate_limiter.allow(user.id)
+                if not allowed:
+                    await websocket.send_json(
+                        {
+                            "type": "rate_limit",
+                            "detail": (
+                                "Rate limit exceeded. "
+                                f"Max {MESSAGE_RATE_LIMIT_COUNT} messages per "
+                                f"{MESSAGE_RATE_LIMIT_WINDOW_SECONDS} seconds."
+                            ),
+                            "retry_after_seconds": retry_after,
+                        }
                     )
                     continue
 

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Task 3 WebSocket Chat Demo</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1, h2 {
+      margin-top: 0;
+    }
+
+    .note {
+      background: #172554;
+      border: 1px solid #3b82f6;
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }
+
+    .panel {
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+    }
+
+    label {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 6px;
+      color: #cbd5e1;
+    }
+
+    input, select, button, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 8px;
+      border: 1px solid #475569;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 14px;
+    }
+
+    button {
+      background: #2563eb;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    button.secondary:hover {
+      background: #334155;
+    }
+
+    .status {
+      margin-bottom: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #1e293b;
+      color: #cbd5e1;
+      font-size: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .messages {
+      height: 360px;
+      overflow-y: auto;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 12px;
+      background: #020617;
+      margin-bottom: 12px;
+    }
+
+    .message {
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      border-radius: 10px;
+      background: #1e293b;
+    }
+
+    .message .meta {
+      font-size: 12px;
+      color: #93c5fd;
+      margin-bottom: 4px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .small {
+      font-size: 12px;
+      color: #94a3b8;
+    }
+
+    code {
+      background: #1e293b;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Task 3 — Protected WebSocket Chat Demo</h1>
+    <div class="note">
+      Open this page in <strong>two or more browser tabs</strong>, log in as different users, join the same room, and send messages to verify real-time multi-client delivery.
+      Use a different <code>room_id</code> in another tab to verify multi-room isolation.
+    </div>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>1. Sign up</h2>
+        <label for="signupUsername">Username</label>
+        <input id="signupUsername" placeholder="user1" />
+
+        <label for="signupEmail">Email</label>
+        <input id="signupEmail" placeholder="user1@example.com" />
+
+        <label for="signupPassword">Password</label>
+        <input id="signupPassword" type="password" placeholder="password123" />
+
+        <label for="signupRole">Role</label>
+        <select id="signupRole">
+          <option value="user">user</option>
+          <option value="admin">admin</option>
+        </select>
+
+        <button id="signupBtn">Create User</button>
+        <div id="signupStatus" class="status">No signup request yet.</div>
+      </section>
+
+      <section class="panel">
+        <h2>2. Login</h2>
+        <label for="loginUsername">Username</label>
+        <input id="loginUsername" placeholder="user1" />
+
+        <label for="loginPassword">Password</label>
+        <input id="loginPassword" type="password" placeholder="password123" />
+
+        <button id="loginBtn">Get JWT Token</button>
+        <div id="loginStatus" class="status">No login request yet.</div>
+        <div class="small">The JWT token is automatically reused for the WebSocket query parameter.</div>
+      </section>
+
+      <section class="panel">
+        <h2>3. Connect to chat room</h2>
+        <label for="roomId">Room ID</label>
+        <input id="roomId" value="general" placeholder="general" />
+
+        <label for="historyLimit">History limit</label>
+        <input id="historyLimit" type="number" value="20" min="1" max="50" />
+
+        <div class="row">
+          <button id="connectBtn">Connect WebSocket</button>
+          <button id="disconnectBtn" class="secondary" type="button">Disconnect</button>
+        </div>
+
+        <div id="wsStatus" class="status">Disconnected.</div>
+      </section>
+
+      <section class="panel">
+        <h2>4. Chat</h2>
+        <div id="messages" class="messages"></div>
+
+        <label for="messageInput">Message</label>
+        <textarea id="messageInput" rows="3" placeholder='Type a message or JSON like {"content":"hello"}'></textarea>
+
+        <div class="row">
+          <button id="sendBtn">Send Message</button>
+          <button id="clearBtn" class="secondary" type="button">Clear Messages</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const signupStatus = document.getElementById("signupStatus");
+    const loginStatus = document.getElementById("loginStatus");
+    const wsStatus = document.getElementById("wsStatus");
+    const messagesEl = document.getElementById("messages");
+
+    const signupUsername = document.getElementById("signupUsername");
+    const signupEmail = document.getElementById("signupEmail");
+    const signupPassword = document.getElementById("signupPassword");
+    const signupRole = document.getElementById("signupRole");
+
+    const loginUsername = document.getElementById("loginUsername");
+    const loginPassword = document.getElementById("loginPassword");
+
+    const roomIdInput = document.getElementById("roomId");
+    const historyLimitInput = document.getElementById("historyLimit");
+    const messageInput = document.getElementById("messageInput");
+
+    let socket = null;
+    let accessToken = localStorage.getItem("chatDemoToken") || "";
+    let currentUsername = localStorage.getItem("chatDemoUsername") || "";
+
+    function setStatus(element, message, isError = false) {
+      element.textContent = message;
+      element.style.border = isError ? "1px solid #ef4444" : "1px solid #334155";
+      element.style.background = isError ? "#450a0a" : "#1e293b";
+    }
+
+    function appendMessage(meta, content) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "message";
+
+      const metaEl = document.createElement("div");
+      metaEl.className = "meta";
+      metaEl.textContent = meta;
+
+      const contentEl = document.createElement("div");
+      contentEl.textContent = content;
+
+      wrapper.appendChild(metaEl);
+      wrapper.appendChild(contentEl);
+      messagesEl.appendChild(wrapper);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function clearMessages() {
+      messagesEl.innerHTML = "";
+    }
+
+    function formatTimestamp(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString();
+    }
+
+    async function signup() {
+      const payload = {
+        username: signupUsername.value.trim(),
+        email: signupEmail.value.trim(),
+        password: signupPassword.value,
+        role: signupRole.value
+      };
+
+      try {
+        const response = await fetch("/auth/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(JSON.stringify(data));
+        }
+
+        setStatus(signupStatus, "Signup successful:\n" + JSON.stringify(data, null, 2));
+        loginUsername.value = payload.username;
+        loginPassword.value = payload.password;
+      } catch (error) {
+        setStatus(signupStatus, "Signup failed:\n" + error.message, true);
+      }
+    }
+
+    async function login() {
+      const payload = {
+        username: loginUsername.value.trim(),
+        password: loginPassword.value
+      };
+
+      try {
+        const response = await fetch("/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(JSON.stringify(data));
+        }
+
+        accessToken = data.access_token;
+        currentUsername = loginUsername.value.trim();
+        localStorage.setItem("chatDemoToken", accessToken);
+        localStorage.setItem("chatDemoUsername", currentUsername);
+
+        setStatus(loginStatus, "Login successful. JWT saved for WebSocket use.\n" + JSON.stringify(data, null, 2));
+      } catch (error) {
+        setStatus(loginStatus, "Login failed:\n" + error.message, true);
+      }
+    }
+
+    function connectWebSocket() {
+      if (!accessToken) {
+        setStatus(wsStatus, "Connect failed: login first to obtain a JWT token.", true);
+        return;
+      }
+
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        setStatus(wsStatus, "Already connected.");
+        return;
+      }
+
+      clearMessages();
+
+      const roomId = encodeURIComponent(roomIdInput.value.trim() || "general");
+      const limit = encodeURIComponent(historyLimitInput.value || "20");
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const url = `${protocol}://${window.location.host}/ws/${roomId}?token=${encodeURIComponent(accessToken)}&limit=${limit}`;
+
+      socket = new WebSocket(url);
+
+      socket.onopen = () => {
+        setStatus(wsStatus, `Connected to room "${decodeURIComponent(roomId)}" as ${currentUsername || "authenticated user"}.`);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+
+          if (payload.type === "history") {
+            appendMessage(
+              `History loaded for room "${payload.room_id}"`,
+              `Messages received: ${payload.messages.length}${payload.next_cursor ? ` | next_cursor: ${payload.next_cursor}` : ""}`
+            );
+
+            for (const message of payload.messages) {
+              appendMessage(
+                `${message.username} • ${formatTimestamp(message.created_at)} • history`,
+                message.content
+              );
+            }
+            return;
+          }
+
+          if (payload.type === "message" && payload.message) {
+            const message = payload.message;
+            appendMessage(
+              `${message.username} • ${formatTimestamp(message.created_at)} • live`,
+              message.content
+            );
+            return;
+          }
+
+          if (payload.type === "error") {
+            appendMessage("Server error", payload.detail || "Unknown error");
+            return;
+          }
+
+          appendMessage("Server payload", event.data);
+        } catch {
+          appendMessage("Raw payload", event.data);
+        }
+      };
+
+      socket.onclose = (event) => {
+        setStatus(wsStatus, `Disconnected. Close code: ${event.code}`);
+        socket = null;
+      };
+
+      socket.onerror = () => {
+        setStatus(wsStatus, "WebSocket error occurred. Check token, room, and server logs.", true);
+      };
+    }
+
+    function disconnectWebSocket() {
+      if (socket) {
+        socket.close();
+      } else {
+        setStatus(wsStatus, "No active WebSocket connection.");
+      }
+    }
+
+    function sendMessage() {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        setStatus(wsStatus, "Cannot send message: WebSocket is not connected.", true);
+        return;
+      }
+
+      const value = messageInput.value.trim();
+      if (!value) {
+        setStatus(wsStatus, "Cannot send an empty message.", true);
+        return;
+      }
+
+      socket.send(value);
+      messageInput.value = "";
+    }
+
+    document.getElementById("signupBtn").addEventListener("click", signup);
+    document.getElementById("loginBtn").addEventListener("click", login);
+    document.getElementById("connectBtn").addEventListener("click", connectWebSocket);
+    document.getElementById("disconnectBtn").addEventListener("click", disconnectWebSocket);
+    document.getElementById("sendBtn").addEventListener("click", sendMessage);
+    document.getElementById("clearBtn").addEventListener("click", clearMessages);
+
+    if (accessToken) {
+      setStatus(loginStatus, "Stored JWT token found in localStorage and ready to use for WebSocket connection.");
+    }
+    if (currentUsername) {
+      loginUsername.value = currentUsername;
+    }
+  </script>
+</body>
+</html>

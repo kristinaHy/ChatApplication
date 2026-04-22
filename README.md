@@ -257,3 +257,162 @@ Expected behavior:
 ![Task 2 Screenshot 11](images/task2u2.png)
 
 ![Task 2 Screenshot 12](images/task2u3.png)
+
+## Task 3: Protected WebSocket Chat
+
+### Overview
+Implemented a JWT-protected WebSocket chat system with support for multiple rooms, multiple connected clients, persisted messages, and room history loading on connection.
+
+### WebSocket Endpoint
+
+#### `WS /ws/{room_id}`
+This is the protected real-time chat endpoint.
+
+**Query Parameters**
+- `token` — required JWT token
+- `cursor` — optional cursor for older message history
+- `limit` — optional number of history messages to return on connect
+
+### Implemented Behavior
+
+#### On connection
+- validates the JWT token passed as a query parameter
+- rejects unauthenticated users
+- loads recent messages for the requested room from the database
+- sends the room history to the client as an initial payload
+
+Example history payload:
+```json
+{
+  "type": "history",
+  "room_id": "general",
+  "messages": [
+    {
+      "id": 1,
+      "room_id": "general",
+      "user_id": 2,
+      "username": "user1",
+      "content": "Hello everyone",
+      "created_at": "2026-04-22T07:15:00+00:00"
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+#### On incoming message
+- reads the incoming text payload
+- accepts plain text or JSON like:
+```json
+{"content": "hello"}
+```
+- validates that the message is not empty
+- stores the message in the database
+- broadcasts the saved message to all connected clients in the same room
+
+Example live message payload:
+```json
+{
+  "type": "message",
+  "room_id": "general",
+  "message": {
+    "id": 2,
+    "room_id": "general",
+    "user_id": 2,
+    "username": "user1",
+    "content": "hello",
+    "created_at": "2026-04-22T07:16:00+00:00"
+  }
+}
+```
+
+#### On disconnection
+- removes the WebSocket from the room connection list
+- cleans up gracefully without affecting other rooms
+
+### Multi-Room Support
+Connections are tracked separately per room using an in-memory connection manager.
+
+This means:
+- users in `general` only receive messages from `general`
+- users in `room2` only receive messages from `room2`
+- multiple rooms can be active at the same time
+
+### Message Persistence
+Messages are stored in the `Message` table with:
+- `id`
+- `room_id`
+- `user_id`
+- `username`
+- `content`
+- `created_at`
+
+This satisfies the persistence requirement for Task 3.
+
+### Browser Tab Demo for Task 3
+
+A browser-based demo page was added at:
+
+#### `GET /task3`
+
+Open:
+```text
+http://127.0.0.1:8000/task3
+```
+
+This page allows you to:
+- create users
+- log in and obtain a JWT
+- connect to `/ws/{room_id}` with the JWT automatically
+- open the same page in multiple browser tabs
+- test same-room and different-room behavior interactively
+
+### How Task 3 Can Be Tested in Different Browser Tabs
+
+#### Test 1: Same room in two browser tabs
+1. Open `http://127.0.0.1:8000/task3` in **Tab 1**
+2. Open `http://127.0.0.1:8000/task3` in **Tab 2**
+3. Sign up or use two different users
+4. Log in in both tabs
+5. Use the same room id, for example `general`
+6. Click **Connect WebSocket** in both tabs
+7. Send a message from Tab 1
+8. Confirm the message appears immediately in Tab 2
+9. Send a message from Tab 2
+10. Confirm the message appears immediately in Tab 1
+
+This demonstrates:
+- multi-client real-time chat
+- room-based broadcasting
+- authenticated WebSocket access
+
+#### Test 2: Different rooms in separate tabs
+1. Keep Tab 1 connected to `general`
+2. In Tab 2, connect to `room2`
+3. Send a message in Tab 1
+4. Confirm it does not appear in Tab 2
+5. Send a message in Tab 2
+6. Confirm it does not appear in Tab 1
+
+This demonstrates:
+- simultaneous multi-room support
+- correct room isolation
+
+#### Test 3: History loading
+1. Send several messages in a room
+2. Disconnect both tabs
+3. Open a fresh tab and reconnect to the same room
+4. Confirm that recent messages are loaded automatically on connection
+
+This demonstrates:
+- database persistence
+- history retrieval on connect
+- cursor-based pagination support
+
+### Security Notes
+- WebSocket connections without a valid token are rejected
+- JWT validation happens before the client is accepted into the room
+- passwords remain hashed and are never stored in plain text
+
+### Deliverable
+**A working WebSocket endpoint that supports multi-client, multi-room real-time messaging, JWT-protected access, and persisted message history.**
