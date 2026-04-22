@@ -73,3 +73,102 @@ ChatApplication/
 ![App Running](images/app-running.png)
 *Screenshot of the FastAPI app running with uvicorn.*
 
+## Task 2: JWT Authentication & Role-Based Access Control (RBAC)
+
+### Overview
+Implemented a secure authentication system with user roles using JWT tokens and role-based access control.
+
+### User Model
+- **Fields**: id, username, email, hashed_password, role
+- **Roles**: admin, user (default)
+- **Database**: SQLModel with SQLAlchemy ORM
+
+### Authentication Endpoints
+
+#### POST /auth/signup
+Creates a new user account with hashed password and assigned role.
+
+**Request Body**:
+```json
+{
+  "username": "string",
+  "email": "string",
+  "password": "string",
+  "role": "user"  // optional, defaults to "user"
+}
+```
+
+**Response**:
+```json
+{
+  "id": 1,
+  "username": "string",
+  "email": "string",
+  "role": "user"
+}
+```
+
+#### POST /auth/login
+Authenticates user and returns JWT access token.
+
+**Request Body** (form data):
+```
+username: string
+password: string
+```
+
+**Response**:
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer"
+}
+```
+
+### JWT Token Features
+- **Algorithm**: HS256
+- **Expiry**: 30 minutes
+- **Payload**: Contains username and role
+- **Security**: Passwords hashed with bcrypt
+
+### Role-Based Access Control
+Implemented reusable FastAPI dependencies for role checking:
+
+- `require_admin`: Restricts access to admin users only
+- `require_user`: Allows any authenticated user
+- `get_current_user`: Returns current authenticated user
+
+### Protected Routes
+
+#### GET /protected/admin
+- **Access**: Admin users only
+- **Response**: `{"message": "Hello {username}, you are an admin!"}`
+
+#### GET /protected/user
+- **Access**: Any authenticated user
+- **Response**: `{"message": "Hello {username}, you are authenticated!"}`
+
+### Usage Example
+```bash
+# 1. Signup
+curl -X POST "http://127.0.0.1:8000/auth/signup" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","email":"admin@example.com","password":"password","role":"admin"}'
+
+# 2. Login
+curl -X POST "http://127.0.0.1:8000/auth/login" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=password"
+
+# 3. Access protected route
+curl -X GET "http://127.0.0.1:8000/protected/admin" \
+  -H "Authorization: Bearer {access_token}"
+```
+
+### Security Features
+- Passwords are never stored in plain text
+- JWT tokens include expiry timestamps
+- Role checks are enforced via dependencies, not hardcoded
+- Secure password hashing using bcrypt
+- Token-based authentication with Bearer scheme
+
