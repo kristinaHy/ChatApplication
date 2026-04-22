@@ -76,99 +76,184 @@ ChatApplication/
 ## Task 2: JWT Authentication & Role-Based Access Control (RBAC)
 
 ### Overview
-Implemented a secure authentication system with user roles using JWT tokens and role-based access control.
+Implemented JWT-based authentication with role-based access control using FastAPI dependencies. Users can register with a role, log in to receive a signed token, and access protected routes based on that role.
 
 ### User Model
-- **Fields**: id, username, email, hashed_password, role
-- **Roles**: admin, user (default)
-- **Database**: SQLModel with SQLAlchemy ORM
+The `User` model includes:
+- `id`
+- `username`
+- `email`
+- `hashed_password`
+- `role`
+
+Supported roles:
+- `admin`
+- `user`
+
+Passwords are stored only as hashed values, never in plain text.
 
 ### Authentication Endpoints
 
-#### POST /auth/signup
-Creates a new user account with hashed password and assigned role.
+#### `POST /auth/signup`
+Creates a new user with a hashed password and assigned role.
 
-**Request Body**:
+**Request Body**
 ```json
 {
-  "username": "string",
-  "email": "string",
-  "password": "string",
-  "role": "user"  // optional, defaults to "user"
+  "username": "admin2",
+  "email": "admin2@example.com",
+  "password": "adminpass123",
+  "role": "admin"
 }
 ```
 
-**Response**:
+**Successful Response**
 ```json
 {
   "id": 1,
-  "username": "string",
-  "email": "string",
-  "role": "user"
+  "username": "admin2",
+  "email": "admin2@example.com",
+  "role": "admin"
 }
 ```
 
-#### POST /auth/login
-Authenticates user and returns JWT access token.
+#### `POST /auth/login`
+Authenticates a user and returns a JWT access token.
 
-**Request Body** (form data):
-```
-username: string
-password: string
+**Form Data**
+```text
+username=admin2
+password=adminpass123
 ```
 
-**Response**:
+**Successful Response**
 ```json
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
   "token_type": "bearer"
 }
 ```
 
-### JWT Token Features
-- **Algorithm**: HS256
-- **Expiry**: 30 minutes
-- **Payload**: Contains username and role
-- **Security**: Passwords hashed with bcrypt
+### JWT Details
+- **Signing Algorithm:** `HS256`
+- **Expiry:** Included in the token payload
+- **Payload Fields:** `sub`, `role`, `exp`
 
-### Role-Based Access Control
-Implemented reusable FastAPI dependencies for role checking:
-
-- `require_admin`: Restricts access to admin users only
-- `require_user`: Allows any authenticated user
-- `get_current_user`: Returns current authenticated user
-
-### Protected Routes
-
-#### GET /protected/admin
-- **Access**: Admin users only
-- **Response**: `{"message": "Hello {username}, you are an admin!"}`
-
-#### GET /protected/user
-- **Access**: Any authenticated user
-- **Response**: `{"message": "Hello {username}, you are authenticated!"}`
-
-### Usage Example
-```bash
-# 1. Signup
-curl -X POST "http://127.0.0.1:8000/auth/signup" \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","email":"admin@example.com","password":"password","role":"admin"}'
-
-# 2. Login
-curl -X POST "http://127.0.0.1:8000/auth/login" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=admin&password=password"
-
-# 3. Access protected route
-curl -X GET "http://127.0.0.1:8000/protected/admin" \
-  -H "Authorization: Bearer {access_token}"
+Example payload:
+```json
+{
+  "sub": "admin2",
+  "role": "admin",
+  "exp": 1776829485
+}
 ```
 
-### Security Features
-- Passwords are never stored in plain text
-- JWT tokens include expiry timestamps
-- Role checks are enforced via dependencies, not hardcoded
-- Secure password hashing using bcrypt
-- Token-based authentication with Bearer scheme
+### RBAC Dependency
+Role checks are enforced using reusable dependencies in `app/dependencies.py`.
 
+```python
+def require_role(required_role: UserRole):
+    def role_checker(current_user: User = Depends(get_current_user)):
+        if current_user.role != required_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not enough permissions"
+            )
+        return current_user
+    return role_checker
+
+require_admin = require_role(UserRole.ADMIN)
+```
+
+### Demonstrated Protected Route
+The RBAC dependency is used on this protected route in `app/main.py`:
+
+```python
+@app.get("/protected/admin")
+async def admin_only(current_user: User = Depends(require_admin)):
+    return {"message": f"Hello {current_user.username}, you are an admin!"}
+```
+
+This demonstrates the deliverable requirement of a reusable RBAC dependency used on a protected route.
+
+### How Task 2 Was Tested
+
+#### 1. Signup test
+Used Swagger UI at `http://127.0.0.1:8000/docs` to call:
+
+- `POST /auth/signup`
+
+Example test body:
+```json
+{
+  "username": "admin2",
+  "email": "admin2@example.com",
+  "password": "adminpass123",
+  "role": "admin"
+}
+```
+
+Expected result:
+- user created successfully
+- response returns `id`, `username`, `email`, and `role`
+
+#### 2. Login test
+Used Swagger UI to call:
+
+- `POST /auth/login`
+
+Example credentials:
+```text
+username: admin2
+password: adminpass123
+```
+
+Expected result:
+- HTTP `200 OK`
+- JWT token returned in `access_token`
+
+#### 3. Authenticated route test
+Used the token returned by `/auth/login` and authenticated in Swagger using the **raw token only**.
+
+Important:
+- paste only the JWT token into Swagger Authorize
+- do **not** type `Bearer ` manually, because Swagger adds it automatically
+
+Then tested:
+- `GET /protected/user` → should return `200 OK`
+- `GET /protected/admin` → should return `200 OK` for admin users
+
+#### 4. RBAC verification
+The `require_admin` dependency protects `GET /protected/admin`.
+
+Expected behavior:
+- admin token → `200 OK`
+- normal user token → `403 Forbidden`
+
+### Deliverable
+**Working `/signup` and `/login` endpoints, and a demonstrated RBAC dependency used on at least one protected route.**
+
+### Task 2 Screenshots
+![Task 2 Screenshot 1](images/task2.png)
+
+![Task 2 Screenshot 2](images/task2.01.png)
+
+![Task 2 Screenshot 3](images/task2.02.png)
+
+![Task 2 Screenshot 4](images/task2.1.png)
+
+![Task 2 Screenshot 5](images/task2.2.png)
+
+![Task 2 Screenshot 6](images/task2.11.png)
+
+![Task 2 Screenshot 7](images/task2.12.png)
+
+![Task 2 Screenshot 8](images/task2.13.png)
+
+![Task 2 Screenshot 9](images/task2u.png)
+
+![Task 2 Screenshot 10](images/task2u1.png)
+
+![Task 2 Screenshot 11](images/task2u2.png)
+
+![Task 2 Screenshot 12](images/task2u3.png)
